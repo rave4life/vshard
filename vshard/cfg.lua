@@ -5,9 +5,9 @@ local luri = require('uri')
 local consts = require('vshard.consts')
 
 local function check_uri(uri)
-    uri = luri.parse(uri)
-    if uri.login == nil or uri.password == nil then
-        error('URI must contain login and password')
+    local parsed = luri.parse(uri)
+    if not parsed then
+        error('Invalid URI: ' .. uri)
     end
 end
 

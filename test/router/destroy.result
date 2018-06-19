@@ -1,0 +1,105 @@
+test_run = require('test_run').new()
+---
+...
+netbox = require('net.box')
+---
+...
+fiber = require('fiber')
+---
+...
+REPLICASET_1 = { 'storage_1_a', 'storage_1_b' }
+---
+...
+REPLICASET_2 = { 'storage_2_a', 'storage_2_b' }
+---
+...
+test_run:create_cluster(REPLICASET_1, 'storage')
+---
+...
+test_run:create_cluster(REPLICASET_2, 'storage')
+---
+...
+util = require('util')
+---
+...
+util.wait_master(test_run, REPLICASET_1, 'storage_1_a')
+---
+...
+util.wait_master(test_run, REPLICASET_2, 'storage_2_a')
+---
+...
+test_run:cmd("create server router_1 with script='router/router_1.lua'")
+---
+- true
+...
+test_run:cmd("start server router_1")
+---
+- true
+...
+_ = test_run:cmd("switch router_1")
+---
+...
+util = require('util')
+---
+...
+fiber = require('fiber')
+---
+...
+test_run:cmd("setopt delimiter ';'")
+---
+- true
+...
+function wait_fibers_exit()
+    while #util.vshard_fiber_list() > 0 do
+        fiber.sleep(0.05)
+    end
+end;
+---
+...
+test_run:cmd("setopt delimiter ''");
+---
+- true
+...
+-- Validate destroy finction by fiber_list.
+-- Netbox fibers are deleted after replicas by GC.
+util.vshard_fiber_list()
+---
+- - 127.0.0.1:3301 (net.box)
+  - 127.0.0.1:3302 (net.box)
+  - 127.0.0.1:3303 (net.box)
+  - 127.0.0.1:3304 (net.box)
+  - discovery_fiber
+  - vshard.failover
+...
+vshard.router.destroy()
+---
+...
+wait_fibers_exit()
+---
+...
+vshard.router.cfg(cfg)
+---
+...
+util.vshard_fiber_list()
+---
+- - 127.0.0.1:3301 (net.box)
+  - 127.0.0.1:3302 (net.box)
+  - 127.0.0.1:3303 (net.box)
+  - 127.0.0.1:3304 (net.box)
+  - discovery_fiber
+  - vshard.failover
+...
+_ = test_run:cmd("switch default")
+---
+...
+test_run:cmd('stop server router_1')
+---
+- true
+...
+test_run:cmd('cleanup server router_1')
+---
+- true
+...
+test_run:drop_cluster(REPLICASET_2)
+---
+...

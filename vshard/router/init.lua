@@ -7,30 +7,49 @@ local lhash = require('vshard.hash')
 local lreplicaset = require('vshard.replicaset')
 local util = require('vshard.util')
 
+local MODULE_SKELETON = {
+    errinj = {
+        ERRINJ_FAILOVER_CHANGE_CFG = false,
+        ERRINJ_RELOAD = false,
+    },
+    -- Bucket map cache.
+    route_map = {},
+    -- All known replicasets used for bucket re-balancing
+    replicasets = nil,
+    -- Fiber to maintain replica connections.
+    failover_fiber = nil,
+    -- Fiber to discovery buckets in background.
+    discovery_fiber = nil,
+    -- Bucket count stored on all replicasets.
+    total_bucket_count = 0,
+    -- If true, then discovery fiber starts to call
+    -- collectgarbage() periodically.
+    collect_lua_garbage = nil,
+    -- This counter is used to restart background fibers with
+    -- new reloaded code.
+    module_version = 0,
+}
+
 local M = rawget(_G, '__module_vshard_router')
-if not M then
-    M = {
-        errinj = {
-            ERRINJ_FAILOVER_CHANGE_CFG = false,
-            ERRINJ_RELOAD = false,
-        },
-        -- Bucket map cache.
-        route_map = {},
-        -- All known replicasets used for bucket re-balancing
-        replicasets = nil,
-        -- Fiber to maintain replica connections.
-        failover_fiber = nil,
-        -- Fiber to discovery buckets in background.
-        discovery_fiber = nil,
-        -- Bucket count stored on all replicasets.
-        total_bucket_count = 0,
-        -- If true, then discovery fiber starts to call
-        -- collectgarbage() periodically.
-        collect_lua_garbage = nil,
-        -- This counter is used to restart background fibers with
-        -- new reloaded code.
-        module_version = 0,
-    }
+local update_M
+
+--
+-- Destroy router module.
+--
+local function destroy()
+    local MODULE_INTERNALS = '__module_vshard_router'
+    assert(rawget(_G, MODULE_INTERNALS), 'Already destroyed')
+    -- Cancel background fibers.
+    for _, fib_name in pairs({
+        'failover_fiber',
+        'discovery_fiber',
+    }) do
+        if M[fib_name] then
+            M[fib_name]:cancel()
+        end
+    end
+    util.override_table(M, MODULE_SKELETON)
+    update_M()
 end
 
 -- Set a replicaset by container of a bucket.
@@ -758,10 +777,6 @@ local function router_sync(timeout)
     end
 end
 
-if M.errinj.ERRINJ_RELOAD then
-    error('Error injection: reload')
-end
-
 --------------------------------------------------------------------------------
 -- Module definition
 --------------------------------------------------------------------------------
@@ -769,13 +784,26 @@ end
 -- About functions, saved in M, and reloading see comment in
 -- storage/init.lua.
 --
-M.discovery_f = discovery_f
-M.failover_f = failover_f
+
+--
+-- Store module-definde values to M.
+--
+update_M = function()
+    M.discovery_f = discovery_f
+    M.failover_f = failover_f
+end
 
 if not rawget(_G, '__module_vshard_router') then
+    M = table.deepcopy(MODULE_SKELETON)
+    update_M()
     rawset(_G, '__module_vshard_router', M)
 else
+    M = rawget(_G, '__module_vshard_router')
     M.module_version = M.module_version + 1
+end
+
+if M.errinj.ERRINJ_RELOAD then
+    error('Error injection: reload')
 end
 
 return {
@@ -792,6 +820,7 @@ return {
     sync = router_sync;
     bootstrap = cluster_bootstrap;
     bucket_discovery = bucket_discovery;
+    destroy = destroy,
     discovery_wakeup = discovery_wakeup;
     internal = M;
     module_version = function() return M.module_version end;

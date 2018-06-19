@@ -69,9 +69,43 @@ local function wait_master(test_run, replicaset, master)
     log.info('Slaves are connected to a master "%s"', master)
 end
 
+function vshard_fiber_list()
+    -- Flush jit traces to prevent them from
+    -- keeping its upvalues in memory.
+    jit.flush()
+    collectgarbage()
+    -- Give a fiber time to clean itself.
+    fiber.sleep(0.05)
+    local fibers = fiber.info()
+    local non_vshard_patterns = {
+        '^console',
+        'feedback_daemon$',
+        '^checkpoint_daemon$',
+        '^main$',
+        '^memtx%.gc$',
+        '^vinyl%.scheduler$',
+    }
+    local names = {}
+    for _, fib in pairs(fibers) do
+        local add = true
+        for _, pattern in pairs(non_vshard_patterns) do
+            if fib.name:match(pattern) then
+                add = false
+                break
+            end
+        end
+        if add then
+            table.insert(names, fib.name)
+        end
+    end
+    table.sort(names)
+    return names
+end;
+
 return {
     check_error = check_error,
     shuffle_masters = shuffle_masters,
     collect_timeouts = collect_timeouts,
     wait_master = wait_master,
+    vshard_fiber_list = vshard_fiber_list,
 }

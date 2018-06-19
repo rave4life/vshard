@@ -75,7 +75,22 @@ local function generate_self_checker(obj_name, func_name, mt, func)
     end
 end
 
+--
+-- Replace itrernals of a table with a template.
+-- @param tbl Table to be updated.
+-- @param template Internals of the `tbl` after the call.
+--
+local function override_table(tbl, template)
+    for k, _ in pairs(tbl) do
+        tbl[k] = nil
+    end
+    for k, v in pairs(template) do
+        tbl[k] = table.deepcopy(v)
+    end
+end
+
 return {
+    override_table = override_table,
     tuple_extract_key = tuple_extract_key,
     reloadable_fiber_f = reloadable_fiber_f,
     generate_self_checker = generate_self_checker,

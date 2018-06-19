@@ -9,89 +9,88 @@ local lcfg = require('vshard.cfg')
 local lreplicaset = require('vshard.replicaset')
 local trigger = require('internal.trigger')
 
-local M = rawget(_G, '__module_vshard_storage')
-if not M then
+--
+-- The module is loaded for the first time.
+--
+local MODULE_SKELETON = {
+    ---------------- Common module attributes ----------------
     --
-    -- The module is loaded for the first time.
+    -- All known replicasets used for bucket re-balancing.
+    -- See format in replicaset.lua.
     --
-    M = {
-        ---------------- Common module attributes ----------------
-        --
-        -- All known replicasets used for bucket re-balancing.
-        -- See format in replicaset.lua.
-        --
-        replicasets = nil,
-        -- Triggers on master switch event. They are called right
-        -- before the event occurs.
-        _on_master_enable = trigger.new('_on_master_enable'),
-        _on_master_disable = trigger.new('_on_master_disable'),
-        -- Index which is a trigger to shard its space by numbers in
-        -- this index. It must have at first part either unsigned,
-        -- or integer or number type and be not nullable. Values in
-        -- this part are considered as bucket identifiers.
-        shard_index = nil,
-        -- Bucket count stored on all replicasets.
-        total_bucket_count = 0,
-        errinj = {
-            ERRINJ_BUCKET_FIND_GARBAGE_DELAY = false,
-            ERRINJ_RELOAD = false,
-            ERRINJ_CFG_DELAY = false,
-            ERRINJ_LONG_RECEIVE = false,
-        },
-        -- This counter is used to restart background fibers with
-        -- new reloaded code.
-        module_version = 0,
-        --
-        -- Timeout to wait sync with slaves. Used on master
-        -- demotion or on a manual sync() call.
-        --
-        sync_timeout = consts.DEFAULT_SYNC_TIMEOUT,
-        -- References to a parent replicaset and self in it.
-        this_replicaset = nil,
-        this_replica = nil,
+    replicasets = nil,
+    -- Triggers on master switch event. They are called right
+    -- before the event occurs.
+    _on_master_enable = trigger.new('_on_master_enable'),
+    _on_master_disable = trigger.new('_on_master_disable'),
+    -- Index which is a trigger to shard its space by numbers in
+    -- this index. It must have at first part either unsigned,
+    -- or integer or number type and be not nullable. Values in
+    -- this part are considered as bucket identifiers.
+    shard_index = nil,
+    -- Bucket count stored on all replicasets.
+    total_bucket_count = 0,
+    errinj = {
+        ERRINJ_BUCKET_FIND_GARBAGE_DELAY = false,
+        ERRINJ_RELOAD = false,
+        ERRINJ_CFG_DELAY = false,
+        ERRINJ_LONG_RECEIVE = false,
+    },
+    -- This counter is used to restart background fibers with
+    -- new reloaded code.
+    module_version = 0,
+    --
+    -- Timeout to wait sync with slaves. Used on master
+    -- demotion or on a manual sync() call.
+    --
+    sync_timeout = consts.DEFAULT_SYNC_TIMEOUT,
+    -- References to a parent replicaset and self in it.
+    this_replicaset = nil,
+    this_replica = nil,
 
-        ------------------- Garbage collection -------------------
-        -- Fiber to remove garbage buckets data.
-        collect_bucket_garbage_fiber = nil,
-        -- Do buckets garbage collection once per this time.
-        collect_bucket_garbage_interval = nil,
-        -- If true, then bucket garbage collection fiber starts to
-        -- call collectgarbage() periodically.
-        collect_lua_garbage = nil,
+    ------------------- Garbage collection -------------------
+    -- Fiber to remove garbage buckets data.
+    collect_bucket_garbage_fiber = nil,
+    -- Do buckets garbage collection once per this time.
+    collect_bucket_garbage_interval = nil,
+    -- If true, then bucket garbage collection fiber starts to
+    -- call collectgarbage() periodically.
+    collect_lua_garbage = nil,
 
-        -------------------- Bucket recovery ---------------------
-        -- Bucket identifiers which are not active and are not being
-        -- sent - their status is unknown. Their state must be checked
-        -- periodically in recovery fiber.
-        buckets_to_recovery = {},
-        buckets_to_recovery_count = 0,
-        recovery_fiber = nil,
+    -------------------- Bucket recovery ---------------------
+    -- Bucket identifiers which are not active and are not being
+    -- sent - their status is unknown. Their state must be checked
+    -- periodically in recovery fiber.
+    buckets_to_recovery = {},
+    buckets_to_recovery_count = 0,
+    recovery_fiber = nil,
 
-        ----------------------- Rebalancer -----------------------
-        -- Fiber to rebalance a cluster.
-        rebalancer_fiber = nil,
-        -- Fiber which applies routes one by one. Its presense and
-        -- active status means that the rebalancing is in progress
-        -- now on the current node.
-        rebalancer_applier_fiber = nil,
-        -- Internal flag to activate and deactivate rebalancer. Mostly
-        -- for tests.
-        is_rebalancer_active = true,
-        -- Maximal allowed percent deviation of bucket count on a
-        -- replicaset from etalon bucket count.
-        rebalancer_disbalance_threshold = 0,
-        -- Maximal bucket count that can be received by a single
-        -- replicaset simultaneously.
-        rebalancer_max_receiving = 0,
-        -- Identifier of a bucket that rebalancer is sending now,
-        -- or else 0. If a bucket has state SENDING, but its id is
-        -- not stored here, it means, that its sending was
-        -- interrupted, for example by restart of an instance, and
-        -- a destination replicaset must drop already received
-        -- data.
-        rebalancer_sending_bucket = 0,
-    }
-end
+    ----------------------- Rebalancer -----------------------
+    -- Fiber to rebalance a cluster.
+    rebalancer_fiber = nil,
+    -- Fiber which applies routes one by one. Its presense and
+    -- active status means that the rebalancing is in progress
+    -- now on the current node.
+    rebalancer_applier_fiber = nil,
+    -- Internal flag to activate and deactivate rebalancer. Mostly
+    -- for tests.
+    is_rebalancer_active = true,
+    -- Maximal allowed percent deviation of bucket count on a
+    -- replicaset from etalon bucket count.
+    rebalancer_disbalance_threshold = 0,
+    -- Maximal bucket count that can be received by a single
+    -- replicaset simultaneously.
+    rebalancer_max_receiving = 0,
+    -- Identifier of a bucket that rebalancer is sending now,
+    -- or else 0. If a bucket has state SENDING, but its id is
+    -- not stored here, it means, that its sending was
+    -- interrupted, for example by restart of an instance, and
+    -- a destination replicaset must drop already received
+    -- data.
+    rebalancer_sending_bucket = 0,
+}
+local M
+local update_M
 
 --
 -- Check if this replicaset is locked. It means be invisible for
@@ -138,6 +137,22 @@ end
 --------------------------------------------------------------------------------
 -- Schema
 --------------------------------------------------------------------------------
+local storage_api = {
+    'vshard.storage.sync',
+    'vshard.storage.call',
+    'vshard.storage.bucket_force_create',
+    'vshard.storage.bucket_force_drop',
+    'vshard.storage.bucket_collect',
+    'vshard.storage.bucket_send',
+    'vshard.storage.bucket_recv',
+    'vshard.storage.bucket_stat',
+    'vshard.storage.buckets_count',
+    'vshard.storage.buckets_info',
+    'vshard.storage.buckets_discovery',
+    'vshard.storage.rebalancer_request_state',
+    'vshard.storage.rebalancer_apply_routes',
+}
+
 local function storage_schema_v1(username, password)
     log.info("Initializing schema")
     box.schema.user.create(username, {
@@ -156,22 +171,6 @@ local function storage_schema_v1(username, password)
     })
     bucket:create_index('pk', {parts = {'id'}})
     bucket:create_index('status', {parts = {'status'}, unique = false})
-
-    local storage_api = {
-        'vshard.storage.sync',
-        'vshard.storage.call',
-        'vshard.storage.bucket_force_create',
-        'vshard.storage.bucket_force_drop',
-        'vshard.storage.bucket_collect',
-        'vshard.storage.bucket_send',
-        'vshard.storage.bucket_recv',
-        'vshard.storage.bucket_stat',
-        'vshard.storage.buckets_count',
-        'vshard.storage.buckets_info',
-        'vshard.storage.buckets_discovery',
-        'vshard.storage.rebalancer_request_state',
-        'vshard.storage.rebalancer_apply_routes',
-    }
 
     for _, name in ipairs(storage_api) do
         box.schema.func.create(name, {setuid = true})
@@ -201,6 +200,40 @@ local function on_master_enable(...)
     if select('#', ...) == 1 and this_is_master() then
         M._on_master_enable:run()
     end
+end
+
+--------------------------------------------------------------------------------
+-- Destroy
+--------------------------------------------------------------------------------
+
+--
+-- Destroy storage module.
+--
+local function destroy()
+    local MODULE_INTERNALS = '__module_vshard_storage'
+    assert(rawget(_G, MODULE_INTERNALS), 'Already destroyed')
+    box.space._bucket:drop()
+    for _, name in ipairs(storage_api) do
+        box.schema.func.drop(name)
+    end
+    -- Cancel background fibers.
+    for _, fib_name in pairs({
+        'recovery_fiber',
+        'collect_bucket_garbage_fiber',
+        'rebalancer_applier_fiber',
+        'rebalancer_fiber',
+    }) do
+        if M[fib_name] then
+            M[fib_name]:cancel()
+        end
+    end
+    local box_cfg = table.deepcopy(box.cfg)
+    box_cfg.replication = {}
+    box_cfg.read_only = false
+    box.cfg(box_cfg)
+    box.space._schema:delete{'oncevshard:storage:1'}
+    util.override_table(M, MODULE_SKELETON)
+    update_M()
 end
 
 --------------------------------------------------------------------------------
@@ -592,10 +625,6 @@ local function bucket_collect_internal(bucket_id)
         table.insert(data, {space.id, space_data})
     end
     return data
-end
-
-if M.errinj.ERRINJ_RELOAD then
-    error('Error injection: reload')
 end
 
 --
@@ -1808,25 +1837,35 @@ end
 -- restarted (or is restarted from M.background_f, which is not
 -- changed) and continues use old func1 and func2.
 --
-M.recovery_f = recovery_f
-M.collect_garbage_f = collect_garbage_f
-M.rebalancer_f = rebalancer_f
 
 --
--- These functions are saved in M not for atomic reload, but for
--- unit testing.
+-- Store module-definde values to M.
 --
-M.find_garbage_bucket = find_garbage_bucket
-M.collect_garbage_step = collect_garbage_step
-M.collect_garbage_f = collect_garbage_f
-M.rebalancer_build_routes = rebalancer_build_routes
-M.rebalancer_calculate_metrics = rebalancer_calculate_metrics
-M.cached_find_sharded_spaces = find_sharded_spaces
+update_M = function()
+    M.recovery_f = recovery_f
+    M.collect_garbage_f = collect_garbage_f
+    M.rebalancer_f = rebalancer_f
+    -- These functions are saved in M not for atomic reload, but for
+    -- unit testing.
+    M.find_garbage_bucket = find_garbage_bucket
+    M.collect_garbage_step = collect_garbage_step
+    M.collect_garbage_f = collect_garbage_f
+    M.rebalancer_build_routes = rebalancer_build_routes
+    M.rebalancer_calculate_metrics = rebalancer_calculate_metrics
+    M.cached_find_sharded_spaces = find_sharded_spaces
+end
 
 if not rawget(_G, '__module_vshard_storage') then
+    M = table.deepcopy(MODULE_SKELETON)
+    update_M()
     rawset(_G, '__module_vshard_storage', M)
 else
+    M = rawget(_G, '__module_vshard_router')
     M.module_version = M.module_version + 1
+end
+
+if M.errinj.ERRINJ_RELOAD then
+    error('Error injection: reload')
 end
 
 return {
@@ -1840,6 +1879,7 @@ return {
     bucket_pin = bucket_pin,
     bucket_unpin = bucket_unpin,
     bucket_delete_garbage = bucket_delete_garbage,
+    destroy = destroy,
     garbage_collector_wakeup = garbage_collector_wakeup,
     rebalancer_wakeup = rebalancer_wakeup,
     rebalancer_apply_routes = rebalancer_apply_routes,

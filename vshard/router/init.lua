@@ -496,18 +496,15 @@ end
 --------------------------------------------------------------------------------
 
 local function router_cfg(cfg)
-    cfg = lcfg.check(cfg, M.current_cfg)
-    local new_cfg = table.copy(cfg)
+    local vshard_cfg, box_cfg = lcfg.check(cfg, M.current_cfg)
     if not M.replicasets then
         log.info('Starting router configuration')
     else
         log.info('Starting router reconfiguration')
     end
-    local new_replicasets = lreplicaset.buildall(cfg)
-    local total_bucket_count = cfg.bucket_count
-    local collect_lua_garbage = cfg.collect_lua_garbage
-    local box_cfg = table.copy(cfg)
-    lcfg.remove_non_box_options(box_cfg)
+    local new_replicasets = lreplicaset.buildall(vshard_cfg)
+    local total_bucket_count = vshard_cfg.bucket_count
+    local collect_lua_garbage = vshard_cfg.collect_lua_garbage
     log.info("Calling box.cfg()...")
     for k, v in pairs(box_cfg) do
         log.info({[k] = v})
@@ -530,11 +527,12 @@ local function router_cfg(cfg)
         replicaset:connect_all()
     end
     lreplicaset.wait_masters_connect(new_replicasets)
-    lreplicaset.outdate_replicasets(M.replicasets, cfg.connection_outdate_delay)
-    M.connection_outdate_delay = cfg.connection_outdate_delay
+    lreplicaset.outdate_replicasets(M.replicasets,
+                                    vshard_cfg.connection_outdate_delay)
+    M.connection_outdate_delay = vshard_cfg.connection_outdate_delay
     M.total_bucket_count = total_bucket_count
     M.collect_lua_garbage = collect_lua_garbage
-    M.current_cfg = cfg
+    M.current_cfg = vshard_cfg
     M.replicasets = new_replicasets
     -- Update existing route map in-place.
     local old_route_map = M.route_map

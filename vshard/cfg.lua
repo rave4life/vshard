@@ -231,47 +231,49 @@ local non_dynamic_options = {
 }
 
 --
+-- Deepcopy a config and split it into vshard_cfg and box_cfg.
+--
+local function split_cfg(cfg)
+    local vshard_field_map = {}
+    for _, field in ipairs(cfg_template) do
+        vshard_field_map[field[1]] = true
+    end
+    local vshard_cfg = {}
+    local box_cfg = {}
+    for k, v in pairs(cfg) do
+        if vshard_field_map[k] then
+            vshard_cfg[k] = table.deepcopy(v)
+        else
+            box_cfg[k] = table.deepcopy(v)
+        end
+    end
+    return vshard_cfg, box_cfg
+end
+
+--
 -- Check sharding config on correctness. Check types, name and uri
 -- uniqueness, master count (in each replicaset must be <= 1).
 --
-local function cfg_check(shard_cfg, old_cfg)
-    if type(shard_cfg) ~= 'table' then
+local function cfg_check(cfg, old_vshard_cfg)
+    if type(cfg) ~= 'table' then
         error('Сonfig must be map of options')
     end
-    shard_cfg = table.deepcopy(shard_cfg)
-    validate_config(shard_cfg, cfg_template)
-    if not old_cfg then
-        return shard_cfg
+    local vshard_cfg, box_cfg = split_cfg(cfg)
+    validate_config(vshard_cfg, cfg_template)
+    if not old_vshard_cfg then
+        return vshard_cfg, box_cfg
     end
     -- Check non-dynamic after default values are added.
     for _, f_name in pairs(non_dynamic_options) do
         -- New option may be added in new vshard version.
-        if shard_cfg[f_name] ~= old_cfg[f_name] then
+        if vshard_cfg[f_name] ~= old_vshard_cfg[f_name] then
            error(string.format('Non-dynamic option %s ' ..
                                'cannot be reconfigured', f_name))
         end
     end
-    return shard_cfg
-end
-
---
--- Nullify non-box options.
---
-local function remove_non_box_options(cfg)
-    cfg.sharding = nil
-    cfg.weights = nil
-    cfg.zone = nil
-    cfg.bucket_count = nil
-    cfg.rebalancer_disbalance_threshold = nil
-    cfg.rebalancer_max_receiving = nil
-    cfg.shard_index = nil
-    cfg.collect_bucket_garbage_interval = nil
-    cfg.collect_lua_garbage = nil
-    cfg.sync_timeout = nil
-    cfg.connection_outdate_delay = nil
+    return vshard_cfg, box_cfg
 end
 
 return {
     check = cfg_check,
-    remove_non_box_options = remove_non_box_options,
 }

@@ -52,9 +52,14 @@ if not M then
     }
 end
 
--- Set a replicaset by container of a bucket.
-local function bucket_set(bucket_id, replicaset)
-    assert(replicaset)
+-- Set a bucket to a replicaset.
+local function bucket_set(bucket_id, rs_uuid)
+    local replicaset = M.replicasets[rs_uuid]
+    -- It is technically possible to delete a replicaset at the
+    -- same time when route to the bucket is discovered.
+    if not replicaset then
+        return nil, lerror.vshard(lerror.code.NO_ROUTE_TO_BUCKET, bucket_id)
+    end
     local old_replicaset = M.route_map[bucket_id]
     if old_replicaset ~= replicaset then
         if old_replicaset then
@@ -63,6 +68,7 @@ local function bucket_set(bucket_id, replicaset)
         replicaset.bucket_count = replicaset.bucket_count + 1
     end
     M.route_map[bucket_id] = replicaset
+    return replicaset
 end
 
 -- Remove a bucket from the cache.
@@ -88,15 +94,18 @@ local function bucket_discovery(bucket_id)
     log.verbose("Discovering bucket %d", bucket_id)
     local last_err = nil
     local unreachable_uuid = nil
-    for uuid, replicaset in pairs(M.replicasets) do
-        local _, err =
-            replicaset:callrw('vshard.storage.bucket_stat', {bucket_id})
-        if err == nil then
-            bucket_set(bucket_id, replicaset)
-            return replicaset
-        elseif err.code ~= lerror.code.WRONG_BUCKET then
-            last_err = err
-            unreachable_uuid = uuid
+    for uuid, _ in pairs(M.replicasets) do
+        -- Handle reload/reconfigure.
+        replicaset = M.replicasets[uuid]
+        if replicaset then
+            local _, err =
+                replicaset:callrw('vshard.storage.bucket_stat', {bucket_id})
+            if err == nil then
+                return bucket_set(bucket_id, replicaset.uuid)
+            elseif err.code ~= lerror.code.WRONG_BUCKET then
+                last_err = err
+                unreachable_uuid = uuid
+            end
         end
     end
     local err = nil
@@ -262,13 +271,13 @@ local function router_call(bucket_id, mode, func, args, opts)
                             end
                         end
                     else
-                        bucket_set(bucket_id, replicaset)
+                        replicaset = bucket_set(bucket_id, replicaset.uuid)
                         lfiber.yield()
                         -- Protect against infinite cycle in a
                         -- case of broken cluster, when a bucket
                         -- is sent on two replicasets to each
                         -- other.
-                        if lfiber.time() <= tend then
+                        if replicaset and lfiber.time() <= tend then
                             goto replicaset_is_found
                         end
                     end
@@ -513,27 +522,28 @@ local function router_cfg(cfg)
     end
     box.cfg(box_cfg)
     log.info("Box has been configured")
-    M.connection_outdate_delay = cfg.connection_outdate_delay
-    M.total_bucket_count = total_bucket_count
-    M.collect_lua_garbage = collect_lua_garbage
-    M.current_cfg = new_cfg
     -- Move connections from an old configuration to a new one.
     -- It must be done with no yields to prevent usage both of not
     -- fully moved old replicasets, and not fully built new ones.
-    lreplicaset.rebind_replicasets(new_replicasets, M.replicasets,
-                                   M.connection_outdate_delay)
-    M.replicasets = new_replicasets
+    lreplicaset.rebind_replicasets(new_replicasets, M.replicasets)
     -- Now the new replicasets are fully built. Can establish
     -- connections and yield.
     for _, replicaset in pairs(new_replicasets) do
         replicaset:connect_all()
     end
+    lreplicaset.wait_masters_connect(new_replicasets)
+    lreplicaset.outdate_replicasets(M.replicasets, cfg.connection_outdate_delay)
+    M.connection_outdate_delay = cfg.connection_outdate_delay
+    M.total_bucket_count = total_bucket_count
+    M.collect_lua_garbage = collect_lua_garbage
+    M.current_cfg = cfg
+    M.replicasets = new_replicasets
     -- Update existing route map in-place.
-    for bucket, rs in pairs(M.route_map) do
+    local old_route_map = M.route_map
+    M.route_map = {}
+    for bucket, rs in pairs(old_route_map) do
         M.route_map[bucket] = M.replicasets[rs.uuid]
     end
-
-    lreplicaset.wait_masters_connect(new_replicasets)
     if M.failover_fiber == nil then
         lfiber.create(util.reloadable_fiber_f, M, 'failover_f', 'Failover')
     end

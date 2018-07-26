@@ -91,7 +91,7 @@ vshard.router.bootstrap()
 --
 -- gh-108: negative bucket count on discovery.
 --
-vshard.router.internal.route_map = {}
+vshard.router.internal.static_router.route_map = {}
 rets = {}
 function do_echo() table.insert(rets, vshard.router.callro(1, 'echo', {1})) end
 f1 = fiber.create(do_echo) f2 = fiber.create(do_echo)
@@ -423,7 +423,7 @@ while vshard.router.internal.errinj.ERRINJ_LONG_DISCOVERY ~= 'waiting' do
     fiber.sleep(0.02)
 end;
 vshard.router.cfg(cfg);
-vshard.router.internal.route_map = {};
+vshard.router.internal.static_router.route_map = {};
 vshard.router.internal.errinj.ERRINJ_LONG_DISCOVERY = false;
 -- Do discovery iteration. Upload buckets from the
 -- first replicaset.

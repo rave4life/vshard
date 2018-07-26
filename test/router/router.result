@@ -225,7 +225,7 @@ vshard.router.bootstrap()
 --
 -- gh-108: negative bucket count on discovery.
 --
-vshard.router.internal.route_map = {}
+vshard.router.internal.static_router.route_map = {}
 ---
 ...
 rets = {}
@@ -1111,7 +1111,7 @@ end;
 vshard.router.cfg(cfg);
 ---
 ...
-vshard.router.internal.route_map = {};
+vshard.router.internal.static_router.route_map = {};
 ---
 ...
 vshard.router.internal.errinj.ERRINJ_LONG_DISCOVERY = false;

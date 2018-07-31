@@ -76,6 +76,9 @@ vshard.router.call(1, 'read', 'do_select', {1})
 router_2:call(1, 'read', 'do_select', {2})
 routers[5]:call(1, 'read', 'do_select', {2})
 
+-- Self checker.
+util.check_error(router_2.info)
+
 _ = test_run:cmd("switch default")
 test_run:cmd("stop server router_1")
 test_run:cmd("cleanup server router_1")

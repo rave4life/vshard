@@ -201,6 +201,11 @@ routers[5]:call(1, 'read', 'do_select', {2})
 ---
 - [[2, 2]]
 ...
+-- Self checker.
+util.check_error(router_2.info)
+---
+- Use router:info(...) instead of router.info(...)
+...
 _ = test_run:cmd("switch default")
 ---
 ...

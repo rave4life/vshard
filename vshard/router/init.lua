@@ -860,6 +860,15 @@ local router_mt = {
     }
 }
 
+--
+-- Wrap self methods with a sanity checker.
+--
+local mt_index = {}
+for name, func in pairs(router_mt.__index) do
+    mt_index[name] = util.generate_self_checker("router", name, router_mt, func)
+end
+router_mt.__index = mt_index
+
 -- Table which represents this module.
 local module = {}
 
